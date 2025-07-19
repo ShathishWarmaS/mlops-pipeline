@@ -1,0 +1,19 @@
+{
+  "experiment_name": "iris_classifier_v2_test",
+  "model_a_path": "models/iris_classifier_v1.joblib",
+  "model_b_path": "models/iris_classifier_v2.joblib",
+  "traffic_split": 0.5,
+  "duration_days": 7,
+  "success_metrics": [
+    "accuracy",
+    "precision",
+    "recall",
+    "f1_score",
+    "latency"
+  ],
+  "minimum_sample_size": 100,
+  "significance_level": 0.05,
+  "power_threshold": 0.8,
+  "minimum_effect_size": 0.2,
+  "auto_conclude": true
+}
