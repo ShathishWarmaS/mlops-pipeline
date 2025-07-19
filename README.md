@@ -1,6 +1,19 @@
 # MLOps Pipeline with MLflow and Kubeflow
 
-A complete MLOps pipeline for iris classification using MLflow for experiment tracking and Kubeflow for pipeline orchestration, deployable on Google Cloud Platform.
+A complete enterprise-grade MLOps pipeline for iris classification using MLflow for experiment tracking and Kubeflow for pipeline orchestration, deployable on Google Cloud Platform.
+
+## 🆕 **What's New - Enhanced MLflow Implementation**
+
+🚀 **Complete Dev/Staging/Prod Lifecycle** - Multi-environment model management with automatic experiment setup
+📊 **70+ Metrics Per Run** - Comprehensive tracking including feature importance, cross-validation, and confidence analysis  
+🎨 **8 Rich Visualizations** - ROC curves, confusion matrices, feature importance plots, and more
+🔄 **Model Promotion Workflows** - CLI tools for promoting models between environments
+📋 **Enterprise Reporting** - Detailed JSON reports with performance comparisons
+🎯 **Production Stage Management** - Staging → Production → Archived lifecycle
+📈 **Advanced Analytics** - Per-class metrics, prediction confidence, overfitting detection
+🔧 **Git Integration** - Automatic commit tracking and metadata logging
+
+Perfect for enterprise MLOps with complete model governance and lifecycle management!
 
 ## 🏗️ Architecture
 
@@ -25,8 +38,12 @@ mlops-pipeline/
 ├── src/                    # Source code
 │   ├── config.py          # Configuration management
 │   ├── data_loader.py     # Data loading utilities
-│   ├── model.py           # ML model with MLflow tracking
-│   └── train.py           # Training script
+│   ├── model.py           # Enhanced ML model with MLflow tracking
+│   ├── train.py           # Multi-environment training script
+│   ├── mlflow_manager.py  # Enhanced MLflow lifecycle management
+│   ├── model_lifecycle.py # Model promotion and lifecycle CLI
+│   ├── serve.py           # FastAPI model serving
+│   └── inference_client.py # API testing client
 ├── kubeflow/              # Kubeflow pipeline components
 │   ├── components.py      # Pipeline components
 │   ├── pipeline.py        # Pipeline definition
@@ -73,11 +90,14 @@ cd mlops-pipeline
 # Activate virtual environment
 source venv/bin/activate
 
-# Run local training
-python src/train.py
+# Run enhanced training with environment support
+python src/train.py --environment development --run-name "local_dev"
 
-# Start local MLflow server
-mlflow server --host 0.0.0.0 --port 5000
+# Start comprehensive MLflow UI
+mlflow ui --backend-store-uri ./mlruns --host 0.0.0.0 --port 5001
+
+# Check model status across environments
+python src/model_lifecycle.py status --mlflow-uri ./mlruns
 ```
 
 ### 2. Docker Development
@@ -288,6 +308,74 @@ curl http://localhost:8000/health
 curl http://localhost:8000/model/info
 ```
 
+## 🎯 Enhanced MLflow Model Lifecycle
+
+### Multi-Environment Training
+
+Train models in different environments with comprehensive tracking:
+
+```bash
+# Development environment
+python src/train.py --environment development --run-name "dev_v1" --mlflow-uri ./mlruns
+
+# Staging environment  
+python src/train.py --environment staging --run-name "staging_validation" --mlflow-uri ./mlruns
+
+# Production environment
+python src/train.py --environment production --run-name "prod_deploy" --mlflow-uri ./mlruns
+```
+
+### Model Lifecycle Management
+
+Use the comprehensive CLI for model lifecycle operations:
+
+```bash
+# Check model status across all environments
+python src/model_lifecycle.py status --mlflow-uri ./mlruns
+
+# Compare performance across environments
+python src/model_lifecycle.py compare --mlflow-uri ./mlruns --output-file comparison.json
+
+# Generate comprehensive model report
+python src/model_lifecycle.py report --mlflow-uri ./mlruns --output-file report.json
+
+# Promote model from staging to production
+python src/model_lifecycle.py promote --mlflow-uri ./mlruns --from-env staging --to-env production
+
+# Transition model to production stage
+python src/model_lifecycle.py transition --mlflow-uri ./mlruns --environment production --version 1 --stage Production
+
+# Clean up old runs (keep last 10)
+python src/model_lifecycle.py cleanup --mlflow-uri ./mlruns --environment development --keep-last 10 --confirm
+```
+
+### MLflow UI Access
+
+```bash
+# Start MLflow UI
+mlflow ui --backend-store-uri ./mlruns --host 0.0.0.0 --port 5001
+
+# Access at: http://localhost:5001
+```
+
+### Rich Visualizations Generated
+
+Each training run automatically generates:
+- `enhanced_confusion_matrix.png` - Confusion matrix with counts and percentages
+- `roc_curves.png` - ROC curves for each class with AUC scores
+- `enhanced_feature_importance.png` - Feature importance with error bars and pie chart
+- `cv_scores.png` - Cross-validation score analysis
+- `prediction_confidence.png` - Prediction confidence distributions
+- `data_distribution.png` - Feature distributions by class
+
+### Model Registry Features
+
+- **Environment-specific registries**: `iris-classifier_development`, `iris-classifier_staging`, `iris-classifier_production`
+- **Automatic versioning**: Sequential version numbers per environment
+- **Stage management**: None → Staging → Production → Archived
+- **Model signatures**: Automatic input/output schema inference
+- **Rich metadata**: Git commits, environment info, training parameters
+
 ## 📊 MLOps Lifecycle Components
 
 ### 1. Data Processing
@@ -314,13 +402,36 @@ curl http://localhost:8000/model/info
   - Input validation and error handling
   - OpenAPI documentation
 
-### 5. Experiment Tracking
-- **MLflow Features**:
-  - Parameter tracking
-  - Metric logging
-  - Model versioning
-  - Artifact storage
-  - Model registry
+### 5. Enhanced MLflow Tracking
+- **Multi-Environment Support**:
+  - Development (`iris-classification-dev`)
+  - Staging (`iris-classification-staging`)
+  - Production (`iris-classification-prod`)
+- **Comprehensive Metrics** (70+ per run):
+  - Core metrics (accuracy, precision, recall, F1, AUC)
+  - Cross-validation statistics (mean, std, min, max)
+  - Feature importance with standard deviations
+  - Per-class performance metrics
+  - Prediction confidence analysis
+  - Data distribution statistics
+- **Advanced Visualizations**:
+  - Enhanced confusion matrices (counts + percentages)
+  - ROC curves for each class
+  - Feature importance plots (bar + pie charts)
+  - Cross-validation score analysis
+  - Prediction confidence distributions
+  - Data distribution by class
+- **Model Lifecycle Management**:
+  - Environment-specific model registries
+  - Version tracking and promotion workflows
+  - Stage management (Staging/Production/Archived)
+  - Performance comparison across environments
+  - Git integration with commit tracking
+- **Enterprise Features**:
+  - Model signatures and input examples
+  - Detailed classification reports
+  - Model interpretation documentation
+  - Automated cleanup utilities
 
 ## 🔧 Configuration
 
