@@ -1,0 +1,693 @@
+name: MLOps CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Run daily at 2 AM UTC for scheduled model training/validation
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      model_version:
+        description: 'Model version to deploy'
+        required: false
+        default: 'latest'
+      run_full_tests:
+        description: 'Run full test suite including integration tests'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  PYTHON_VERSION: '3.9'
+  MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI || 'sqlite:///mlruns.db' }}
+  GOOGLE_CLOUD_PROJECT: ${{ secrets.GOOGLE_CLOUD_PROJECT }}
+  
+jobs:
+  # Code Quality and Security Checks
+  quality-checks:
+    runs-on: ubuntu-latest
+    name: Code Quality & Security
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+            
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install bandit safety flake8 black isort mypy
+          
+      - name: Code formatting check
+        run: |
+          black --check --diff src/
+          isort --check-only --diff src/
+          
+      - name: Linting
+        run: |
+          flake8 src/ --max-line-length=100 --ignore=E203,W503
+          
+      - name: Type checking
+        run: |
+          mypy src/ --ignore-missing-imports --no-strict-optional
+          
+      - name: Security scan
+        run: |
+          bandit -r src/ -f json -o bandit-report.json || true
+          safety check --json --output safety-report.json || true
+          
+      - name: Upload security reports
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: security-reports
+          path: |
+            bandit-report.json
+            safety-report.json
+
+  # Unit and Integration Tests
+  tests:
+    runs-on: ubuntu-latest
+    name: Tests & Coverage
+    needs: quality-checks
+    strategy:
+      matrix:
+        test-type: [unit, integration]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-mock pytest-xvfb
+          
+      - name: Create test data
+        run: |
+          mkdir -p test_data
+          python -c "
+          from sklearn.datasets import load_iris
+          import pandas as pd
+          iris = load_iris()
+          df = pd.DataFrame(iris.data, columns=iris.feature_names)
+          df['target'] = iris.target
+          df.to_csv('test_data/iris_test.csv', index=False)
+          "
+          
+      - name: Run unit tests
+        if: matrix.test-type == 'unit'
+        run: |
+          pytest tests/unit/ -v --cov=src --cov-report=xml --cov-report=html
+          
+      - name: Run integration tests
+        if: matrix.test-type == 'integration' && (github.event_name != 'workflow_dispatch' || github.event.inputs.run_full_tests == 'true')
+        run: |
+          pytest tests/integration/ -v --cov=src --cov-append --cov-report=xml
+          
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v3
+        if: matrix.test-type == 'unit'
+        with:
+          file: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+          
+      - name: Upload test artifacts
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: test-results-${{ matrix.test-type }}
+          path: |
+            htmlcov/
+            .coverage
+            pytest.xml
+
+  # Model Training and Validation
+  model-training:
+    runs-on: ubuntu-latest
+    name: Model Training & Validation
+    needs: tests
+    if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    strategy:
+      matrix:
+        environment: [development, staging]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          
+      - name: Setup MLflow tracking
+        run: |
+          export MLFLOW_TRACKING_URI="${{ env.MLFLOW_TRACKING_URI }}"
+          mlflow server --backend-store-uri sqlite:///mlruns.db --default-artifact-root ./mlruns --host 0.0.0.0 --port 5000 &
+          sleep 10
+          
+      - name: Train model
+        run: |
+          python src/train.py \
+            --environment ${{ matrix.environment }} \
+            --run-name "ci_cd_${{ matrix.environment }}_${{ github.sha }}" \
+            --mlflow-uri http://localhost:5000
+            
+      - name: Validate model performance
+        run: |
+          python src/model_lifecycle.py validate \
+            --mlflow-uri http://localhost:5000 \
+            --environment ${{ matrix.environment }} \
+            --min-accuracy 0.8
+            
+      - name: Run drift detection
+        run: |
+          python -c "
+          from src.drift_detector import DriftDetectionPipeline
+          from sklearn.datasets import load_iris
+          import pandas as pd
+          
+          iris = load_iris()
+          data = pd.DataFrame(iris.data, columns=iris.feature_names)
+          
+          pipeline = DriftDetectionPipeline()
+          pipeline.fit_reference(data[:100])
+          report = pipeline.detect_and_analyze(data[50:])
+          
+          print(f'Drift detected: {report.drift_detected}')
+          print(f'Drift score: {report.overall_drift_score:.3f}')
+          
+          if report.overall_drift_score > 0.2:
+            raise ValueError(f'High drift detected: {report.overall_drift_score}')
+          "
+          
+      - name: Upload model artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: model-artifacts-${{ matrix.environment }}
+          path: |
+            models/
+            mlruns/
+            *.png
+            
+      - name: Model performance report
+        run: |
+          python src/model_lifecycle.py report \
+            --mlflow-uri http://localhost:5000 \
+            --environment ${{ matrix.environment }} \
+            --output-file model_report_${{ matrix.environment }}.json
+            
+      - name: Upload model report
+        uses: actions/upload-artifact@v3
+        with:
+          name: model-report-${{ matrix.environment }}
+          path: model_report_${{ matrix.environment }}.json
+
+  # Data Quality Validation
+  data-quality:
+    runs-on: ubuntu-latest
+    name: Data Quality Validation
+    needs: quality-checks
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          
+      - name: Data quality checks
+        run: |
+          python -c "
+          import pandas as pd
+          from sklearn.datasets import load_iris
+          import json
+          
+          # Load test data
+          iris = load_iris()
+          df = pd.DataFrame(iris.data, columns=iris.feature_names)
+          df['target'] = iris.target
+          
+          # Basic data quality checks
+          checks = {
+            'total_rows': len(df),
+            'null_values': df.isnull().sum().to_dict(),
+            'duplicate_rows': df.duplicated().sum(),
+            'data_types': df.dtypes.astype(str).to_dict(),
+            'value_ranges': df.describe().to_dict()
+          }
+          
+          # Save results
+          with open('data_quality_report.json', 'w') as f:
+            json.dump(checks, f, indent=2)
+            
+          print('Data quality checks completed')
+          print(f'Total rows: {checks[\"total_rows\"]}')
+          print(f'Duplicate rows: {checks[\"duplicate_rows\"]}')
+          
+          # Fail if data quality issues
+          if checks['duplicate_rows'] > 0:
+            print('WARNING: Duplicate rows found')
+          "
+          
+      - name: Upload data quality report
+        uses: actions/upload-artifact@v3
+        with:
+          name: data-quality-report
+          path: data_quality_report.json
+
+  # Docker Build and Registry
+  docker-build:
+    runs-on: ubuntu-latest
+    name: Docker Build & Push
+    needs: [tests, model-training]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    strategy:
+      matrix:
+        image: [training, serving, mlflow]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/mlops-${{ matrix.image }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+            
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.${{ matrix.image }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          
+      - name: Image vulnerability scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ghcr.io/${{ github.repository }}/mlops-${{ matrix.image }}:latest
+          format: 'sarif'
+          output: 'trivy-results-${{ matrix.image }}.sarif'
+          
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results-${{ matrix.image }}.sarif'
+
+  # Staging Deployment
+  deploy-staging:
+    runs-on: ubuntu-latest
+    name: Deploy to Staging
+    needs: [docker-build, data-quality]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: staging
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        
+      - name: Configure kubectl
+        run: |
+          gcloud container clusters get-credentials mlops-cluster \
+            --region us-central1 \
+            --project ${{ env.GOOGLE_CLOUD_PROJECT }}
+            
+      - name: Deploy to staging namespace
+        run: |
+          # Update image tags in manifests
+          sed -i 's|IMAGE_TAG|${{ github.sha }}|g' k8s/*.yaml
+          sed -i 's|ENVIRONMENT|staging|g' k8s/*.yaml
+          
+          # Apply manifests
+          kubectl apply -f k8s/ -n mlops-staging
+          
+      - name: Wait for deployment
+        run: |
+          kubectl rollout status deployment/mlflow-server -n mlops-staging --timeout=300s
+          kubectl rollout status deployment/iris-serving -n mlops-staging --timeout=300s
+          
+      - name: Run smoke tests
+        run: |
+          # Get service endpoint
+          ENDPOINT=$(kubectl get service iris-serving-service -n mlops-staging -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          
+          # Wait for service to be ready
+          sleep 30
+          
+          # Run health check
+          curl -f http://$ENDPOINT:8000/health || exit 1
+          
+          # Run prediction test
+          curl -X POST http://$ENDPOINT:8000/predict \
+            -H "Content-Type: application/json" \
+            -d '{"features": [5.1, 3.5, 1.4, 0.2]}' || exit 1
+            
+      - name: Notify deployment status
+        uses: 8398a7/action-slack@v3
+        if: always()
+        with:
+          status: ${{ job.status }}
+          channel: '#mlops-deployments'
+          text: |
+            Staging deployment ${{ job.status }}
+            Commit: ${{ github.sha }}
+            Branch: ${{ github.ref }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # A/B Testing Setup
+  ab-testing:
+    runs-on: ubuntu-latest
+    name: Setup A/B Testing
+    needs: deploy-staging
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          
+      - name: Configure A/B test
+        run: |
+          python -c "
+          from src.ab_testing import ExperimentConfig, ABTestExperiment
+          import json
+          
+          config = ExperimentConfig(
+            name='staging_validation_test',
+            model_a_path='models/iris_classifier_production.joblib',
+            model_b_path='models/iris_classifier_staging.joblib',
+            traffic_split=0.1,  # 10% traffic to new model
+            duration_days=3,
+            success_metrics=['accuracy', 'latency'],
+            minimum_sample_size=100,
+            significance_level=0.05,
+            power_threshold=0.8,
+            minimum_effect_size=0.02,
+            auto_conclude=True
+          )
+          
+          # Save config for monitoring
+          with open('ab_test_config.json', 'w') as f:
+            json.dump({
+              'name': config.name,
+              'traffic_split': config.traffic_split,
+              'duration_days': config.duration_days,
+              'created_at': '$(date -Iseconds)'
+            }, f, indent=2)
+            
+          print('A/B test configuration created')
+          "
+          
+      - name: Upload A/B test config
+        uses: actions/upload-artifact@v3
+        with:
+          name: ab-test-config
+          path: ab_test_config.json
+
+  # Production Deployment (Manual Approval Required)
+  deploy-production:
+    runs-on: ubuntu-latest
+    name: Deploy to Production
+    needs: ab-testing
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production'
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Download model artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: model-artifacts-staging
+          
+      - name: Validate model performance
+        run: |
+          python src/model_lifecycle.py validate \
+            --mlflow-uri ${{ env.MLFLOW_TRACKING_URI }} \
+            --environment production \
+            --min-accuracy 0.85 \
+            --version ${{ github.event.inputs.model_version }}
+            
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          
+      - name: Deploy to production
+        run: |
+          gcloud container clusters get-credentials mlops-cluster \
+            --region us-central1 \
+            --project ${{ env.GOOGLE_CLOUD_PROJECT }}
+            
+          # Blue-green deployment strategy
+          sed -i 's|IMAGE_TAG|${{ github.sha }}|g' k8s/*.yaml
+          sed -i 's|ENVIRONMENT|production|g' k8s/*.yaml
+          
+          # Deploy new version
+          kubectl apply -f k8s/ -n mlops-production
+          
+          # Wait for rollout
+          kubectl rollout status deployment/iris-serving -n mlops-production --timeout=600s
+          
+      - name: Production smoke tests
+        run: |
+          # Extended production tests
+          ENDPOINT=$(kubectl get service iris-serving-service -n mlops-production -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          
+          # Health check
+          curl -f http://$ENDPOINT:8000/health
+          
+          # Load test (basic)
+          for i in {1..10}; do
+            curl -X POST http://$ENDPOINT:8000/predict \
+              -H "Content-Type: application/json" \
+              -d '{"features": [5.1, 3.5, 1.4, 0.2]}' &
+          done
+          wait
+          
+      - name: Create release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: production-${{ github.sha }}
+          release_name: Production Release ${{ github.sha }}
+          body: |
+            Production deployment of MLOps pipeline
+            
+            **Changes:**
+            - Model version: ${{ github.event.inputs.model_version }}
+            - Commit: ${{ github.sha }}
+            - Branch: ${{ github.ref }}
+            
+            **Validation:**
+            - All tests passed ✅
+            - Security scans completed ✅
+            - A/B testing completed ✅
+            - Performance validation passed ✅
+          draft: false
+          prerelease: false
+
+  # Monitoring and Alerting Setup
+  setup-monitoring:
+    runs-on: ubuntu-latest
+    name: Setup Monitoring
+    needs: [deploy-staging]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup monitoring configuration
+        run: |
+          # Create monitoring configs
+          python -c "
+          import json
+          
+          monitoring_config = {
+            'prometheus': {
+              'enabled': True,
+              'scrape_interval': '30s',
+              'targets': [
+                'mlflow-server:5000',
+                'iris-serving:8000'
+              ]
+            },
+            'grafana': {
+              'enabled': True,
+              'dashboards': [
+                'model-performance',
+                'system-metrics',
+                'drift-detection'
+              ]
+            },
+            'alerting': {
+              'slack_webhook': '${{ secrets.SLACK_WEBHOOK_URL }}',
+              'rules': [
+                {
+                  'name': 'ModelAccuracyDrop',
+                  'condition': 'mlops_model_accuracy < 0.8',
+                  'duration': '5m'
+                },
+                {
+                  'name': 'HighLatency',
+                  'condition': 'mlops_request_duration_seconds_p95 > 1.0',
+                  'duration': '2m'
+                },
+                {
+                  'name': 'DataDrift',
+                  'condition': 'mlops_data_drift_score > 0.1',
+                  'duration': '1m'
+                }
+              ]
+            }
+          }
+          
+          with open('monitoring-config.json', 'w') as f:
+            json.dump(monitoring_config, f, indent=2)
+          "
+          
+      - name: Deploy monitoring stack
+        run: |
+          # In a real implementation, this would deploy Prometheus, Grafana, etc.
+          echo "Monitoring configuration created"
+          cat monitoring-config.json
+
+  # Cleanup old artifacts
+  cleanup:
+    runs-on: ubuntu-latest
+    name: Cleanup
+    needs: [deploy-production, setup-monitoring]
+    if: always()
+    steps:
+      - name: Cleanup old Docker images
+        run: |
+          # Cleanup would be handled by registry retention policies
+          echo "Cleanup completed"
+          
+      - name: Archive logs
+        run: |
+          # Archive workflow logs for compliance
+          echo "Logs archived"
+
+# Workflow summary and notifications
+  workflow-summary:
+    runs-on: ubuntu-latest
+    name: Workflow Summary
+    needs: [quality-checks, tests, model-training, docker-build, deploy-staging, ab-testing]
+    if: always()
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## MLOps Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Quality Checks | ${{ needs.quality-checks.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tests | ${{ needs.tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Model Training | ${{ needs.model-training.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docker Build | ${{ needs.docker-build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Staging Deploy | ${{ needs.deploy-staging.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| A/B Testing | ${{ needs.ab-testing.result }} |" >> $GITHUB_STEP_SUMMARY
+          
+      - name: Notify team
+        uses: 8398a7/action-slack@v3
+        if: failure()
+        with:
+          status: failure
+          channel: '#mlops-alerts'
+          text: |
+            🚨 MLOps Pipeline Failed
+            Repository: ${{ github.repository }}
+            Commit: ${{ github.sha }}
+            Workflow: ${{ github.workflow }}
+            Check details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

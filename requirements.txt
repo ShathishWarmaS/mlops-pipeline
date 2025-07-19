@@ -1,17 +1,62 @@
+# Core MLOps Dependencies
 mlflow==2.8.1
 kubeflow-pipelines==2.0.0
 kfp==2.5.0
+
+# Machine Learning & Data Science
 scikit-learn==1.3.2
 pandas==2.1.4
 numpy==1.24.3
+scipy==1.11.4
 matplotlib==3.7.2
 seaborn==0.12.2
+joblib==1.3.2
+
+# Google Cloud Platform
 google-cloud-storage==2.10.0
 google-cloud-aiplatform==1.38.1
-joblib==1.3.2
-click==8.1.7
-pyyaml==6.0.1
-requests==2.31.0
+
+# Web Framework & API
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 pydantic==2.5.2
+requests==2.31.0
+
+# Utilities
+click==8.1.7
+pyyaml==6.0.1
+
+# Monitoring & Observability
+prometheus-client==0.19.0
+opentelemetry-api==1.21.0
+opentelemetry-sdk==1.21.0
+opentelemetry-instrumentation-logging==0.42b0
+opentelemetry-exporter-jaeger-thrift==1.21.0
+opentelemetry-exporter-prometheus==1.12.0rc1
+psutil==5.9.6
+
+# Scheduling & Background Tasks
+schedule==1.2.0
+
+# Advanced ML Features
+shap==0.44.0
+lime==0.2.0.1
+
+# Data Quality & Validation
+great-expectations==0.18.8
+evidently==0.4.22
+
+# Security
+cryptography==41.0.8
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Enhanced Testing
+pytest==7.4.3
+pytest-cov==4.1.0
+pytest-mock==3.12.0
+
+# Development Tools
+black==23.11.0
+flake8==6.1.0
+isort==5.12.0
