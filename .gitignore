@@ -78,3 +78,6 @@ gcp-service-account-key.json
 *.temp
 confusion_matrix.png
 feature_importance.png
+
+# Claude Code settings
+.claude/
