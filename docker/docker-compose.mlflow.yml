@@ -1,0 +1,229 @@
+version: '3.8'
+
+# Enhanced MLOps Docker Compose with Multi-Environment Support
+# Usage Examples:
+#   Development: docker-compose -f docker-compose.mlflow.yml --profile dev up
+#   Staging: docker-compose -f docker-compose.mlflow.yml --profile staging up  
+#   Production: docker-compose -f docker-compose.mlflow.yml --profile prod up
+#   Full Pipeline: docker-compose -f docker-compose.mlflow.yml --profile dev --profile staging --profile prod --profile serving up
+
+services:
+  # MLflow Tracking Server
+  mlflow:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.mlflow
+    container_name: mlflow-server
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_data:/mlflow
+      - mlflow_artifacts:/mlflow/artifacts
+    environment:
+      - MLFLOW_ARTIFACT_ROOT=/mlflow/artifacts
+      - MLFLOW_DEFAULT_ARTIFACT_ROOT=/mlflow/artifacts
+    networks:
+      - mlops-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Development Environment Training
+  training-dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.training
+    container_name: iris-training-dev
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - PYTHONPATH=/app
+      - ENVIRONMENT=development
+      - RUN_NAME=docker_dev_${TIMESTAMP:-$(date +%s)}
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models
+      - ../logs:/app/logs
+      - mlflow_data:/app/mlruns
+      - mlflow_artifacts:/app/mlflow/artifacts
+    networks:
+      - mlops-network
+    profiles:
+      - dev
+      - training
+
+  # Staging Environment Training
+  training-staging:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.training
+    container_name: iris-training-staging
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - PYTHONPATH=/app
+      - ENVIRONMENT=staging
+      - RUN_NAME=docker_staging_${TIMESTAMP:-$(date +%s)}
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models
+      - ../logs:/app/logs
+      - mlflow_data:/app/mlruns
+      - mlflow_artifacts:/app/mlflow/artifacts
+    networks:
+      - mlops-network
+    profiles:
+      - staging
+      - training
+
+  # Production Environment Training
+  training-prod:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.training
+    container_name: iris-training-prod
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - PYTHONPATH=/app
+      - ENVIRONMENT=production
+      - RUN_NAME=docker_prod_${TIMESTAMP:-$(date +%s)}
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models
+      - ../logs:/app/logs
+      - mlflow_data:/app/mlruns
+      - mlflow_artifacts:/app/mlflow/artifacts
+    networks:
+      - mlops-network
+    profiles:
+      - prod
+      - training
+
+  # Model Serving API
+  serving:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.serving
+    container_name: iris-serving
+    ports:
+      - "8000:8000"
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - PYTHONPATH=/app
+      - MODEL_PATH=/app/models/iris_classifier_production.joblib
+      - SCALER_PATH=/app/data/scaler.pkl
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models
+      - mlflow_data:/app/mlruns
+      - mlflow_artifacts:/app/mlflow/artifacts
+    networks:
+      - mlops-network
+    profiles:
+      - serving
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Model Lifecycle Management
+  model-lifecycle:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.training
+    container_name: iris-model-lifecycle
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - PYTHONPATH=/app
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models
+      - ../logs:/app/logs
+      - mlflow_data:/app/mlruns
+      - mlflow_artifacts:/app/mlflow/artifacts
+    networks:
+      - mlops-network
+    profiles:
+      - lifecycle
+    entrypoint: ["python", "src/model_lifecycle.py"]
+    command: ["status", "--mlflow-uri", "http://mlflow:5000"]
+
+  # Model Promotion Service
+  model-promotion:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.training
+    container_name: iris-model-promotion
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - PYTHONPATH=/app
+      - FROM_ENV=${FROM_ENV:-staging}
+      - TO_ENV=${TO_ENV:-production}
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models
+      - ../logs:/app/logs
+      - mlflow_data:/app/mlruns
+      - mlflow_artifacts:/app/mlflow/artifacts
+    networks:
+      - mlops-network
+    profiles:
+      - promotion
+    entrypoint: ["python", "src/model_lifecycle.py"]
+    command: ["promote", "--mlflow-uri", "http://mlflow:5000", "--from-env", "${FROM_ENV:-staging}", "--to-env", "${TO_ENV:-production}"]
+
+  # Inference Testing
+  inference-test:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.training
+    container_name: iris-inference-test
+    depends_on:
+      serving:
+        condition: service_healthy
+    environment:
+      - PYTHONPATH=/app
+      - API_URL=http://serving:8000
+    volumes:
+      - ../examples:/app/examples
+      - ../logs:/app/logs
+    networks:
+      - mlops-network
+    profiles:
+      - test
+    entrypoint: ["python", "src/inference_client.py"]
+    command: ["test", "--url", "http://serving:8000", "--samples", "5"]
+
+volumes:
+  mlflow_data:
+    driver: local
+  mlflow_artifacts:
+    driver: local
+
+networks:
+  mlops-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

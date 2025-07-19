@@ -16,24 +16,71 @@ services:
       - mlops-network
     restart: unless-stopped
 
-  training:
+  training-dev:
     build:
       context: ..
       dockerfile: docker/Dockerfile.training
-    container_name: iris-training
+    container_name: iris-training-dev
     depends_on:
       - mlflow
     environment:
       - MLFLOW_TRACKING_URI=http://mlflow:5000
       - PYTHONPATH=/app
+      - ENVIRONMENT=development
+      - RUN_NAME=docker_dev_training
     volumes:
       - ../data:/app/data
       - ../models:/app/models
       - ../logs:/app/logs
+      - mlflow_data:/app/mlruns
     networks:
       - mlops-network
     profiles:
-      - training
+      - dev
+
+  training-staging:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.training
+    container_name: iris-training-staging
+    depends_on:
+      - mlflow
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - PYTHONPATH=/app
+      - ENVIRONMENT=staging
+      - RUN_NAME=docker_staging_training
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models
+      - ../logs:/app/logs
+      - mlflow_data:/app/mlruns
+    networks:
+      - mlops-network
+    profiles:
+      - staging
+
+  training-prod:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.training
+    container_name: iris-training-prod
+    depends_on:
+      - mlflow
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - PYTHONPATH=/app
+      - ENVIRONMENT=production
+      - RUN_NAME=docker_prod_training
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models
+      - ../logs:/app/logs
+      - mlflow_data:/app/mlruns
+    networks:
+      - mlops-network
+    profiles:
+      - prod
 
   serving:
     build:
@@ -47,15 +94,38 @@ services:
     environment:
       - MLFLOW_TRACKING_URI=http://mlflow:5000
       - PYTHONPATH=/app
-      - MODEL_PATH=/app/models/iris_classifier.joblib
+      - MODEL_PATH=/app/models/iris_classifier_production.joblib
       - SCALER_PATH=/app/data/scaler.pkl
     volumes:
       - ../data:/app/data
       - ../models:/app/models
+      - mlflow_data:/app/mlruns
     networks:
       - mlops-network
     profiles:
       - serving
+
+  model-lifecycle:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.training
+    container_name: iris-model-lifecycle
+    depends_on:
+      - mlflow
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - PYTHONPATH=/app
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models
+      - ../logs:/app/logs
+      - mlflow_data:/app/mlruns
+    networks:
+      - mlops-network
+    profiles:
+      - lifecycle
+    entrypoint: ["python", "src/model_lifecycle.py"]
+    command: ["status", "--mlflow-uri", "http://mlflow:5000"]
 
 volumes:
   mlflow_data:

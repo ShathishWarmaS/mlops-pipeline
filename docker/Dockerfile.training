@@ -22,6 +22,8 @@ RUN mkdir -p models logs
 # Set environment variables
 ENV PYTHONPATH=/app
 ENV MLFLOW_TRACKING_URI=http://mlflow-service:5000
+ENV ENVIRONMENT=development
+ENV RUN_NAME=docker_training
 
-# Run training script
-CMD ["python", "src/train.py", "--mlflow-uri", "${MLFLOW_TRACKING_URI}", "--experiment-name", "iris-classification-docker"]
+# Run enhanced training script with environment support
+CMD ["sh", "-c", "python src/train.py --mlflow-uri ${MLFLOW_TRACKING_URI} --environment ${ENVIRONMENT} --run-name ${RUN_NAME}"]

@@ -102,18 +102,75 @@ python src/model_lifecycle.py status --mlflow-uri ./mlruns
 
 ### 2. Docker Development
 
+#### Basic Docker Compose (Simple MLflow + Training)
+
 ```bash
 # Start MLflow server
-docker-compose -f docker/docker-compose.yml up
+docker-compose -f docker/docker-compose.yml up mlflow
 
-# Run training container
-docker-compose -f docker/docker-compose.yml --profile training up
+# Run development training
+docker-compose -f docker/docker-compose.yml --profile dev up
+
+# Run staging training  
+docker-compose -f docker/docker-compose.yml --profile staging up
+
+# Run production training
+docker-compose -f docker/docker-compose.yml --profile prod up
 
 # Run serving API
 docker-compose -f docker/docker-compose.yml --profile serving up
 
-# Run complete pipeline (training + serving)
-docker-compose -f docker/docker-compose.yml --profile training --profile serving up
+# Complete development pipeline
+docker-compose -f docker/docker-compose.yml --profile dev --profile serving up
+```
+
+#### Enhanced MLflow Docker Compose (Full Lifecycle Management)
+
+```bash
+# Start MLflow with health checks
+docker-compose -f docker/docker-compose.mlflow.yml up mlflow
+
+# Development environment training
+docker-compose -f docker/docker-compose.mlflow.yml --profile dev up
+
+# Staging environment training
+docker-compose -f docker/docker-compose.mlflow.yml --profile staging up
+
+# Production environment training
+docker-compose -f docker/docker-compose.mlflow.yml --profile prod up
+
+# All training environments
+docker-compose -f docker/docker-compose.mlflow.yml --profile training up
+
+# Model serving with health checks
+docker-compose -f docker/docker-compose.mlflow.yml --profile serving up
+
+# Model lifecycle management
+docker-compose -f docker/docker-compose.mlflow.yml --profile lifecycle up
+
+# Model promotion workflow
+FROM_ENV=staging TO_ENV=production docker-compose -f docker/docker-compose.mlflow.yml --profile promotion up
+
+# Inference testing
+docker-compose -f docker/docker-compose.mlflow.yml --profile test up
+
+# Complete MLOps pipeline (all profiles)
+docker-compose -f docker/docker-compose.mlflow.yml \
+  --profile dev --profile staging --profile prod \
+  --profile serving --profile lifecycle up
+```
+
+#### Environment-Specific Training
+
+```bash
+# Development with custom run name
+TIMESTAMP=$(date +%s) docker-compose -f docker/docker-compose.mlflow.yml --profile dev up
+
+# Production deployment with timestamp
+TIMESTAMP=$(date +%s) docker-compose -f docker/docker-compose.mlflow.yml --profile prod up
+
+# Custom model promotion
+FROM_ENV=development TO_ENV=staging docker-compose -f docker/docker-compose.mlflow.yml --profile promotion up
 ```
 
 ## ☁️ Google Cloud Deployment
