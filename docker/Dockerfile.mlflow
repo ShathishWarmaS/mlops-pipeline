@@ -1,0 +1,24 @@
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install MLflow and dependencies
+RUN pip install mlflow==2.8.1 psycopg2-binary google-cloud-storage
+
+# Create directories
+RUN mkdir -p /mlflow/artifacts /mlflow/db
+
+# Set environment variables
+ENV MLFLOW_ARTIFACT_ROOT=/mlflow/artifacts
+ENV MLFLOW_DEFAULT_ARTIFACT_ROOT=/mlflow/artifacts
+
+# Expose MLflow port
+EXPOSE 5000
+
+# Run MLflow server
+CMD ["mlflow", "server", \
+     "--host", "0.0.0.0", \
+     "--port", "5000", \
+     "--backend-store-uri", "sqlite:///mlflow/db/mlflow.db", \
+     "--default-artifact-root", "/mlflow/artifacts", \
+     "--serve-artifacts"]

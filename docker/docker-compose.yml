@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  mlflow:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.mlflow
+    container_name: mlflow-server
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_data:/mlflow
+    environment:
+      - MLFLOW_ARTIFACT_ROOT=/mlflow/artifacts
+    networks:
+      - mlops-network
+    restart: unless-stopped
+
+  training:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.training
+    container_name: iris-training
+    depends_on:
+      - mlflow
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - PYTHONPATH=/app
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models
+      - ../logs:/app/logs
+    networks:
+      - mlops-network
+    profiles:
+      - training
+
+  serving:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.serving
+    container_name: iris-serving
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mlflow
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - PYTHONPATH=/app
+      - MODEL_PATH=/app/models/iris_classifier.joblib
+      - SCALER_PATH=/app/data/scaler.pkl
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models
+    networks:
+      - mlops-network
+    profiles:
+      - serving
+
+volumes:
+  mlflow_data:
+
+networks:
+  mlops-network:
+    driver: bridge

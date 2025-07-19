@@ -1,0 +1,41 @@
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install FastAPI and serving dependencies
+RUN pip install --no-cache-dir \
+    fastapi==0.104.1 \
+    uvicorn[standard]==0.24.0 \
+    pydantic==2.5.2
+
+# Copy requirements and install remaining dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy source code
+COPY src/ ./src/
+
+# Create directories for models and data
+RUN mkdir -p models data logs
+
+# Set environment variables
+ENV PYTHONPATH=/app
+ENV MODEL_PATH=/app/models/iris_classifier.joblib
+ENV SCALER_PATH=/app/data/scaler.pkl
+ENV MLFLOW_TRACKING_URI=http://mlflow-service:5000
+
+# Expose serving port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Run serving API
+CMD ["uvicorn", "src.serve:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

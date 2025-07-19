@@ -1,0 +1,59 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: iris-training-job
+  namespace: mlops-pipeline
+  labels:
+    app: iris-training
+spec:
+  template:
+    metadata:
+      labels:
+        app: iris-training
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: iris-training
+        image: gcr.io/YOUR_PROJECT_ID/iris-training:latest
+        env:
+        - name: MLFLOW_TRACKING_URI
+          value: "http://mlflow-service:5000"
+        - name: PYTHONPATH
+          value: "/app"
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: "/var/secrets/google/key.json"
+        volumeMounts:
+        - name: gcp-service-account
+          mountPath: /var/secrets/google
+          readOnly: true
+        - name: model-storage
+          mountPath: /app/models
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1"
+      volumes:
+      - name: gcp-service-account
+        secret:
+          secretName: gcp-service-account-key
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: model-pvc
+  backoffLimit: 3
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: model-pvc
+  namespace: mlops-pipeline
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: standard

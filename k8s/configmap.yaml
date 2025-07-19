@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mlops-config
+  namespace: mlops-pipeline
+data:
+  MLFLOW_TRACKING_URI: "http://mlflow-service:5000"
+  MLFLOW_EXPERIMENT_NAME: "iris-classification-gke"
+  MODEL_NAME: "iris-classifier"
+  TEST_SIZE: "0.2"
+  RANDOM_STATE: "42"
+  N_ESTIMATORS: "100"
